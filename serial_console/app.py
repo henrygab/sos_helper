@@ -21,7 +21,7 @@ from .shell import InteractiveShell
 from .commands.builtin import register_builtin_commands
 from .commands.examples import register_example_commands
 from .commands.sword_of_secrets import register_sword_of_secrets_commands
-#from .commands.sword_of_secrets_spoilers_1 import register_sword_of_secrets_spoilers_1
+from .commands.sword_of_secrets_spoilers_1 import register_sword_of_secrets_spoilers_1
 #from .commands.sword_of_secrets_spoilers_2 import register_sword_of_secrets_spoilers_2
 #from .commands.sword_of_secrets_spoilers_3 import register_sword_of_secrets_spoilers_3
 #from .commands.sword_of_secrets_spoilers_4 import register_sword_of_secrets_spoilers_4
@@ -50,7 +50,7 @@ class Application:
         register_builtin_commands(self.command_registry)
         register_example_commands(self.command_registry)
         register_sword_of_secrets_commands(self.command_registry)
-        #register_sword_of_secrets_spoilers_1(self.command_registry)
+        register_sword_of_secrets_spoilers_1(self.command_registry)
         #register_sword_of_secrets_spoilers_2(self.command_registry)
         #register_sword_of_secrets_spoilers_3(self.command_registry)
         #register_sword_of_secrets_spoilers_4(self.command_registry)
