@@ -91,28 +91,27 @@ async def cmd_help(args: str, ctx: CommandContext) -> None:
         if cmd is None:
             ctx.print_error(f"Unknown command: {target}")
             return
-        ctx.print(f"  {cmd.name} — {cmd.help_text}", "info")
+        ctx.print_info(f"  {cmd.name} — {cmd.help_text}")
         if cmd.usage:
-            ctx.print(f"  Usage: {cmd.usage}", "info")
+            ctx.print_info(f"  Usage: {cmd.usage}")
         return
 
-    ctx.print("\n  Available Commands:", "info")
-    ctx.print("  " + "\u2500" * 50, "info")
+    ctx.print_info("\n  Available Commands:")
+    ctx.print_info("  " + "\u2500" * 50)
 
     for category, commands in ctx.registry.commands_by_category().items():
-        ctx.print(f"\n  [{category}]", "status")
+        ctx.print_info(f"\n  [{category}]")
         for cmd in commands:
             padding = " " * max(1, 16 - len(cmd.name))
-            ctx.print(f"    {cmd.name}{padding}{cmd.help_text}")
+            ctx.print_info(f"    {cmd.name}{padding}{cmd.help_text}")
 
-    ctx.print("")
-    ctx.print("  Lines that do not match a command are sent to the serial port.", "info")
-    ctx.print("  Type 'help <command>' for detailed usage.\n", "info")
+    ctx.print_info("")
+    ctx.print_info("  Type 'help <command>' for detailed usage.\n")
 
 
 async def cmd_quit(args: str, ctx: CommandContext) -> None:
     """Signal the shell to exit."""
-    ctx.print("Exiting…", "status")
+    ctx.print_info("Exiting...")
     ctx.shell.stop()
 
 
@@ -157,7 +156,7 @@ async def cmd_ports(args: str, ctx: CommandContext) -> None:
         ctx.print_info("No serial ports found.")
         return
 
-    ctx.print("\n  Available Serial Ports:", "info")
+    ctx.print_info("\n  Available Serial Ports:")
     for p in ports:
         active = (
             " \u25c4 connected"

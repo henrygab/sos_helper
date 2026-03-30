@@ -1,8 +1,12 @@
-# Serial Console
+# Sword of Secrets Programmable Serial Console
 
-An interactive, line‑oriented serial‑port console specifically designed
-to simplify programmatic interaction with the Sword of Secrets
-hardware CTF.
+Check out my write-ups at https://henrygab.github.io/, check out
+the first stage via an online emulator at https://swordofsecrets.com/,
+and of course please consider purchasing the hardware if you enjoy it.
+
+This repository contains interactive, line‑oriented serial‑port console
+specifically designed to simplify programmatic interaction with the
+Sword of Secrets hardware CTF.
 
 Built on **asyncio**, **pySerial**, and **prompt\_toolkit**.
 
@@ -83,6 +87,8 @@ python main.py
 | `write_flash <address> <hex data>`   | Write SPI flash on Sword              |
 | `erase_flash_4k <address>`           | Erase 4k of the SPI flash on Sword    |
 | `dump_flash`                         | Prints non-empty areas of SPI flash   |
+| `reboot`                             | Reboots the device                    |
+| `solve`                              | Checks solution progress              |
 ---
 
 
