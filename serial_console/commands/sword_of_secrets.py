@@ -31,20 +31,32 @@ def register_sword_of_secrets_commands(registry: CommandRegistry) -> None:
     )
     registry.register(
         "read_flash", cmd_read_flash,
-        "Read flash data from specific area of the connected Sword of Secrets device",
+        "Read flash data",
         usage="read_flash <address> [length=0x40]",
         category="Sword of Secrets",
     )
     registry.register(
         "erase_flash_4k", cmd_erase_flash_4k,
-        "Erase 4K flash sector of the connected Sword of Secrets device.",
+        "Erase 4K flash sector",
         usage="erase_flash_4k <address>",
         category="Sword of Secrets",
     )
     registry.register(
         "write_flash", cmd_write_flash,
-        "Write flash data to the connected Sword of Secrets device",
+        "Write flash data",
         usage="write_flash <address> <hex_data>",
+        category="Sword of Secrets",
+    )
+    registry.register(
+        "reboot", cmd_reboot,
+        "Reboot the Sword of Secrets",
+        usage="reboot",
+        category="Sword of Secrets",
+    )
+    registry.register(
+        "solve", cmd_solve,
+        "Check progress towards solution",
+        usage="solve",
         category="Sword of Secrets",
     )
 
@@ -932,6 +944,13 @@ async def cmd_erase_flash_4k(args: str, ctx: CommandContext) -> None:
     with ctx.shell.suppress_serial_output():
         await erase_flash_4k(address, ctx)
         ctx.print_info(f"Erased 4K block of flash at address 0x{address:06x}.")
+async def cmd_reboot(args: str, ctx: CommandContext) -> None:
+    await util_send_command("REBOOT", ctx)
+async def cmd_solve(args: str, ctx: CommandContext) -> None:
+    await util_send_command("SOLVE", ctx)
+
+
+
 
 # ---------------------------------------------------------------------------
 # FIN
