@@ -32,6 +32,16 @@ def register_builtin_commands(registry: CommandRegistry) -> None:
         usage="quit", category="Built‑in",
     )
     registry.register(
+        "q", cmd_quit,
+        "Exit the console (alias for quit)",
+        usage="quit", category="Built‑in",
+    )
+    registry.register(
+        "x", cmd_quit,
+        "Exit the console (alias for quit)",
+        usage="quit", category="Built‑in",
+    )
+    registry.register(
         "exit", cmd_quit,
         "Exit the console (alias for quit)",
         usage="exit", category="Built‑in",
