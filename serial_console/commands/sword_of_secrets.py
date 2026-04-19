@@ -433,7 +433,7 @@ async def util_send_command(args: str, ctx: CommandContext) -> list[str]:
         results.append(line)
     return results
 
-async def read_flash(address:int, length:int, ctx: CommandContext) -> bytes:
+async def read_flash(address:int, length:int, ctx: CommandContext) -> bytearray:
     """Helper to read flash data from the device."""
     results = bytearray(length)
 
@@ -461,7 +461,7 @@ async def read_flash(address:int, length:int, ctx: CommandContext) -> bytes:
     l = await util_send_command("RELEASE", ctx)
     l = await util_send_command("END", ctx)
 
-    return bytes(results)
+    return results
 
 # Callback for reading flash with callback function
 class ReadFlashDataChunkCallback(Protocol):
@@ -533,6 +533,56 @@ async def read_flash_with_callback(ctx : CommandContext, start_address : int, le
     if progress_callback is not None:
         await progress_callback(ctx, start_address + length)    
 
+#region _read_modify_write_flash_impl() -- untested helper function
+# async def _read_modify_write_flash_impl(address: int, data:bytes, ctx: CommandContext) -> None:
+#     """Helper to read-modify-write flash data on the device."""
+
+#     WRITE_SECTOR_SIZE   : int = 0x0100
+#     ERASE_4K_BLOCK_SIZE : int = 0x1000
+#     ERASE_4K_BLOCK_MASK : int = ~(ERASE_4K_BLOCK_SIZE - 1)
+
+#     # Smallest erase block size is 4k, while maximum write
+#     # size is a 256 byte sector.
+#     # To support unaligned writes with any sort of retry,
+#     # need to cache the entire 4k sector(s) in memory before
+#     # performing any writes (for recovery/retry purposes),
+#     # erase the entire 4k block, and then write back the
+#     # modified data in 256 byte chunks.
+#     erase_block_start_address = address & ERASE_4K_BLOCK_MASK
+#     erase_block_end_address = address + len(data)
+#     # align up to 4k boundary (if not already aligned)
+#     if (erase_block_end_address & ERASE_4K_BLOCK_MASK) != 0:
+#         erase_block_end_address = (erase_block_end_address & ERASE_4K_BLOCK_MASK) + ERASE_4K_BLOCK_SIZE
+#     erase_block_byte_count = erase_block_end_address - erase_block_start_address
+#     erase_block_original_data = await read_flash(erase_block_start_address, erase_block_byte_count, ctx)
+
+#     # make a copy to be written to the flash after erase
+#     new_data = bytearray(erase_block_original_data)
+#     offset = address - erase_block_start_address
+#     new_data[offset:offset+len(data)] = data
+
+#     # Erase the entire 4k block (for each erase block)
+#     for i in range(erase_block_start_address, erase_block_end_address, ERASE_4K_BLOCK_SIZE):
+#         await erase_flash_4k(i, ctx)
+    
+#     # Now, write back the modified data in 256 byte chunks
+#     for i in range(0, erase_block_byte_count, WRITE_SECTOR_SIZE):
+#         chunk_address = erase_block_start_address + i
+#         chunk_data = bytes(new_data[i:i+WRITE_SECTOR_SIZE])
+#         await _write_flash_impl(chunk_address, chunk_data, ctx)
+
+#     # Verify the data was successfully written?
+#     if True:
+#         read_back = await read_flash(erase_block_start_address, erase_block_byte_count, ctx)
+#         if read_back != new_data:
+#             # TODO: can we add heuristics on types of failure here?
+#             #       e.g., if read_back == erase_block_original_data,
+#             #             then maybe the media is write-protected?
+#             raise ValueError("Verification failed: data read back does not match data written.", erase_block_original_data, read_back)
+
+#     return
+#endregion
+
 async def _write_flash_impl(address:int, data:bytes, ctx: CommandContext) -> None:
     """Helper to write flash data to the device."""
     if len(data) < 1 or len(data) > 256:
@@ -572,8 +622,8 @@ async def _write_flash_impl(address:int, data:bytes, ctx: CommandContext) -> Non
 # NOTE: This function will erase 4k on failed write; set max_retries to zero to disable this.
 async def write_flash(address: int, data: bytes, ctx: CommandContext, max_retries: int = 5) -> None:
     """Helper to write flash data to the device, with erase + write retry on failure."""
-    if (address % 0x100) != 0:
-        raise ValueError(f"Address must be aligned to 256-byte boundary (mask 0xFF).") 
+    if (address % 0x1000) != 0:
+        raise ValueError(f"Address must be aligned to 4K (0x1000) boundary (mask 0xFFF).")
     for attempt in range(max_retries):
         try:
             for i in range(0, len(data), 256):
@@ -586,12 +636,24 @@ async def write_flash(address: int, data: bytes, ctx: CommandContext, max_retrie
             if attempt < max_retries:
                 ctx.print_info("Retrying...")
                 # NO, it is NOT normally a good idea to erase larger area on write.
-                # For SoS usage, it's fine....
+                # For SoS usage, it's fine as we always write on 4K boundary
                 erase_address = address & ~0xFFF # align down to 4K boundary
                 await erase_flash_4k(erase_address, ctx) 
             else:
                 ctx.print_error("Max retries reached. Write failed.")
                 raise
+
+async def write_flash_with_length_prefix(address: int, data: bytes, ctx: CommandContext, max_retries: int = 5) -> None:
+    """Helper to write flash data to the device, with length prefix, and with erase + write retry on failure."""
+    if len(data) > (0x1000 - 4):
+        raise ValueError("Data length must be less than or equal to 4092 bytes (0x1000 - 4).")
+    if (address % 0x1000) != 0:
+        raise ValueError(f"Address must be aligned to 4K (0x1000) boundary (mask 0xFFF).")
+    length_prefixed_data = bytes(
+        int.to_bytes(len(data), length=4, byteorder='little') +
+        data
+    )
+    await write_flash(address, length_prefixed_data, ctx, max_retries)
 
 async def wait_for_flash_nonbusy(ctx: CommandContext) -> None:
     """Helper to wait until the flash is no longer busy."""

@@ -209,13 +209,9 @@ async def write_stage3_ciphertext(ctx: CommandContext, ciphertext: bytes, erase:
         raise ValueError(f"Unexpected data length: 0x{datalen:02x} (expected at least 0x20)")
     if datalen > 0x80:
         raise ValueError(f"Unexpected data length: 0x{datalen:02x} (expected at most 0x80)")
-    sector_data : bytearray = bytearray(
-        int.to_bytes(len(ciphertext), length=4, byteorder='little') +
-        ciphertext
-    )
     if erase:
         await sos.erase_flash_4k(0x30000, ctx)
-    await sos.write_flash(0x30000, sector_data, ctx)
+    await sos.write_flash_with_length_prefix(0x30000, ciphertext, ctx)
 
 async def stage3_check_oracle(ctx: CommandContext) -> OracleResponse:
     """Helper to check the stage 3 padding oracle response."""
@@ -682,9 +678,7 @@ async def Stage3GeneralCallback(ctx: CommandContext, progress: Stage3SolutionPro
         pass
     else:
         ctx.print_warning(f"Unknown progress stage: {progress.stage}")
-
-
-
+ 
 async def cmd_sos3_autosolve(args: str, ctx: CommandContext) -> None:
     """Helper to write the stage 3 solution to the device."""
     with ctx.shell.suppress_serial_output():
