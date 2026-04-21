@@ -15,7 +15,7 @@ from binascii import Error
 
 from ..command_registry import CommandContext, CommandRegistry
 from enum import Enum
-from typing import Literal, Optional, Sequence, Tuple, Type, overload, TypeAlias, Protocol
+from typing import Literal, Optional, Sequence, Tuple, Type, TypeVar, overload, TypeAlias, Protocol
 
 # ---------------------------------------------------------------------------
 # Registration entry point
@@ -57,6 +57,12 @@ def register_sword_of_secrets_commands(registry: CommandRegistry) -> None:
         "solve", cmd_solve,
         "Check progress towards solution",
         usage="solve",
+        category="Sword of Secrets",
+    )
+    registry.register(
+        "wp", cmd_wp,
+        "Manipulate WPS=1 write protection state",
+        usage="wp <enable | disable>\nwp <lock | unlock> <all | address>",
         category="Sword of Secrets",
     )
 
@@ -250,7 +256,10 @@ class StatusRegister3(StatusRegisterBase):
         else:
             self.value &= 0xFB
 
+WriteProtectionTypeVar = TypeVar("WriteProtectionTypeVar", bound="WriteProtectionType")
+
 class WriteProtectionType(Enum):
+    #region enumeration values
     # First, all the combinations with WPS=0 and CMP=0
     NONE                            = 0b0000000            # WPS = 0, CMP = 0, SEC = x, TB = x, BP[2:0] = 0
     PROTECT_FC0000h_TO_FFFFFFh      = 0b0000001            # WPS = 0, CMP = 0, SEC = 0, TB = 0, BP[2:0] = 1
@@ -322,14 +331,17 @@ class WriteProtectionType(Enum):
     NONE_alt7                       = 0b0111111            # WPS = 0, CMP = 1, SEC = 0, TB = 0, BP[2:0] = 7
 
     INDIVIDUAL_BLOCK_PROTECT        = 0b1000000            # WPS = 1, all other bits are zero (don't care, technically)
+    #endregion enumeration values
 
-    # Helper properties to extract status-register fields from enum value.
+    #region Helper properties to extract status-register fields from enum value.
     @property
     def WPS(self) -> bool:
+        """When WPS=1, each 64k (0x10000) block individually gets tracked for write protection.  POR defaults to all blocks being write-protected!"""
         return bool((self.value >> 6) & 0b1)
 
     @property
     def CMP(self) -> bool:
+        """The protection scheme is the the complement of the same scheme without this bit set."""
         return bool((self.value >> 5) & 0b1)
 
     @property
@@ -343,7 +355,9 @@ class WriteProtectionType(Enum):
     @property
     def BP(self) -> int:
         return self.value & 0b111
+    #endregion Helper properties to extract status-register fields from enum value.
 
+    #region Complex properties: IsNoWriteProtection(), IsFullWriteProtection(), LowestProtectedAddress(), HighestUnprotectedAddress()
     @property
     def IsNoWriteProtection(self) -> int:
         return (not self.WPS) and ((not self.CMP and self.BP == 0) or (self.CMP and self.BP == 7))
@@ -351,6 +365,224 @@ class WriteProtectionType(Enum):
     @property
     def IsFullWriteProtection(self) -> int:
         return (not self.WPS) and ((not self.CMP and self.BP == 7) or (self.CMP and self.BP == 0))
+
+    @property
+    def LowestProtectedAddress(self) -> int | None:
+        if self.WPS:
+            raise ValueError("Cannot determine lowest protected address when WPS=1, as the protection scheme is different (individual block protection).")
+        match self:
+            case WriteProtectionType.NONE                            : return None
+            case WriteProtectionType.PROTECT_FC0000h_TO_FFFFFFh      : return 0xFC0000
+            case WriteProtectionType.PROTECT_F80000h_TO_FFFFFFh      : return 0xF80000
+            case WriteProtectionType.PROTECT_F00000h_TO_FFFFFFh      : return 0xF00000
+            case WriteProtectionType.PROTECT_E00000h_TO_FFFFFFh      : return 0xE00000
+            case WriteProtectionType.PROTECT_C00000h_TO_FFFFFFh      : return 0xC00000
+            case WriteProtectionType.PROTECT_800000h_TO_FFFFFFh      : return 0x800000
+            case WriteProtectionType.PROTECT_ALL                     : return 0x000000   
+            case WriteProtectionType.NONE_alt1                       : return None
+            case WriteProtectionType.PROTECT_000000h_TO_03FFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_07FFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_0FFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_1FFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_3FFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_7FFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_ALL_alt1                : return 0x000000
+            case WriteProtectionType.NONE_alt2                       : return None     
+            case WriteProtectionType.PROTECT_FFF000h_TO_FFFFFFh      : return 0xFFF000
+            case WriteProtectionType.PROTECT_FFE000h_TO_FFFFFFh      : return 0xFFE000
+            case WriteProtectionType.PROTECT_FFC000h_TO_FFFFFFh      : return 0xFFC000
+            case WriteProtectionType.PROTECT_FF8000h_TO_FFFFFFh      : return 0xFF8000
+            case WriteProtectionType.PROTECT_FF8000h_TO_FFFFFFh_alt1 : return 0xFF8000
+            case WriteProtectionType.PROTECT_ALL_alt2                : return 0x000000
+            case WriteProtectionType.NONE_alt3                       : return None     
+            case WriteProtectionType.PROTECT_000000h_TO_000FFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_001FFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_003FFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_007FFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_007FFFh_alt  : return 0x000000
+            case WriteProtectionType.PROTECT_ALL_alt3                : return 0x000000
+            case WriteProtectionType.PROTECT_ALL_alt4                : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_FBFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_F7FFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_EFFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_DFFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_BFFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_7FFFFFh_alt1 : return 0x000000
+            case WriteProtectionType.NONE_alt4                       : return None     
+            case WriteProtectionType.PROTECT_ALL_alt5                : return 0x000000
+            case WriteProtectionType.PROTECT_040000h_TO_FFFFFFh      : return 0x040000
+            case WriteProtectionType.PROTECT_080000h_TO_FFFFFFh      : return 0x080000
+            case WriteProtectionType.PROTECT_100000h_TO_FFFFFFh      : return 0x100000
+            case WriteProtectionType.PROTECT_200000h_TO_FFFFFFh      : return 0x200000
+            case WriteProtectionType.PROTECT_400000h_TO_FFFFFFh      : return 0x400000
+            case WriteProtectionType.PROTECT_800000h_TO_FFFFFFh_alt1 : return 0x800000
+            case WriteProtectionType.NONE_alt5                       : return None     
+            case WriteProtectionType.PROTECT_ALL_alt6                : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_FFEFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_FDFFFFh      : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_FBFFFFh_alt1 : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_F7FFFFh_alt2 : return 0x000000
+            case WriteProtectionType.PROTECT_000000h_TO_F7FFFFh_alt3 : return 0x000000
+            case WriteProtectionType.NONE_alt6                       : return None     
+            case WriteProtectionType.PROTECT_ALL_alt7                : return 0x000000
+            case WriteProtectionType.PROTECT_001000h_TO_FFFFFFh      : return 0x001000
+            case WriteProtectionType.PROTECT_002000h_TO_FFFFFFh      : return 0x002000
+            case WriteProtectionType.PROTECT_004000h_TO_FFFFFFh      : return 0x004000
+            case WriteProtectionType.PROTECT_008000h_TO_FFFFFFh      : return 0x008000
+            case WriteProtectionType.PROTECT_008000h_TO_FFFFFFh_alt1 : return 0x008000
+            case WriteProtectionType.NONE_alt7                       : return None     
+            case WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT        : pass # exception raised earlier
+
+    @property
+    def HighestProtectedAddress(self) -> int | None:
+        if self.WPS:
+            raise ValueError("Cannot determine lowest protected address when WPS=1, as the protection scheme is different (individual block protection).")
+        match self:
+            case WriteProtectionType.NONE                            : return None
+            case WriteProtectionType.PROTECT_FC0000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_F80000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_F00000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_E00000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_C00000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_800000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_ALL                     : return 0xFFFFFF   
+            case WriteProtectionType.NONE_alt1                       : return None
+            case WriteProtectionType.PROTECT_000000h_TO_03FFFFh      : return 0x03FFFF
+            case WriteProtectionType.PROTECT_000000h_TO_07FFFFh      : return 0x07FFFF
+            case WriteProtectionType.PROTECT_000000h_TO_0FFFFFh      : return 0x0FFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_1FFFFFh      : return 0x1FFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_3FFFFFh      : return 0x3FFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_7FFFFFh      : return 0x7FFFFF
+            case WriteProtectionType.PROTECT_ALL_alt1                : return 0xFFFFFF
+            case WriteProtectionType.NONE_alt2                       : return None     
+            case WriteProtectionType.PROTECT_FFF000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_FFE000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_FFC000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_FF8000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_FF8000h_TO_FFFFFFh_alt1 : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_ALL_alt2                : return 0xFFFFFF
+            case WriteProtectionType.NONE_alt3                       : return None     
+            case WriteProtectionType.PROTECT_000000h_TO_000FFFh      : return 0x000FFF
+            case WriteProtectionType.PROTECT_000000h_TO_001FFFh      : return 0x001FFF
+            case WriteProtectionType.PROTECT_000000h_TO_003FFFh      : return 0x003FFF
+            case WriteProtectionType.PROTECT_000000h_TO_007FFFh      : return 0x007FFF
+            case WriteProtectionType.PROTECT_000000h_TO_007FFFh_alt  : return 0x007FFF
+            case WriteProtectionType.PROTECT_ALL_alt3                : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_ALL_alt4                : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_FBFFFFh      : return 0xFBFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_F7FFFFh      : return 0xF7FFFF
+            case WriteProtectionType.PROTECT_000000h_TO_EFFFFFh      : return 0xEFFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_DFFFFFh      : return 0xDFFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_BFFFFFh      : return 0xBFFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_7FFFFFh_alt1 : return 0x7FFFFF
+            case WriteProtectionType.NONE_alt4                       : return None     
+            case WriteProtectionType.PROTECT_ALL_alt5                : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_040000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_080000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_100000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_200000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_400000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_800000h_TO_FFFFFFh_alt1 : return 0xFFFFFF
+            case WriteProtectionType.NONE_alt5                       : return None     
+            case WriteProtectionType.PROTECT_ALL_alt6                : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_FFEFFFh      : return 0xFFEFFF
+            case WriteProtectionType.PROTECT_000000h_TO_FDFFFFh      : return 0xFDFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_FBFFFFh_alt1 : return 0xFBFFFF
+            case WriteProtectionType.PROTECT_000000h_TO_F7FFFFh_alt2 : return 0xF7FFFF
+            case WriteProtectionType.PROTECT_000000h_TO_F7FFFFh_alt3 : return 0xF7FFFF
+            case WriteProtectionType.NONE_alt6                       : return None     
+            case WriteProtectionType.PROTECT_ALL_alt7                : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_001000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_002000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_004000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_008000h_TO_FFFFFFh      : return 0xFFFFFF
+            case WriteProtectionType.PROTECT_008000h_TO_FFFFFFh_alt1 : return 0xFFFFFF
+            case WriteProtectionType.NONE_alt7                       : return None     
+            case WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT        : pass # exception raised earlier
+    #endregion Complex properties: IsNoWriteProtection(), IsFullWriteProtection(), LowestProtectedAddress(), HighestUnprotectedAddress()
+
+    #region FromStatusRegisters() and FromFields() factory methods
+    @classmethod
+    def FromStatusRegisters(cls, *, sr1: StatusRegister1, sr2: StatusRegister2, sr3: StatusRegister3, throwOnInvalidWriteProtectValue: bool = False) -> WriteProtectionType:
+        """Construct from the three status registers"""
+        return cls.FromFields(
+            wps=sr3.WPS,
+            cmp=sr2.CMP,
+            sec=sr1.SEC,
+            tb=sr1.TB,
+            bp=sr1.BP,
+            throwOnInvalidWriteProtectValue=throwOnInvalidWriteProtectValue
+        )
+
+    @overload
+    @classmethod
+    def FromFields(
+        cls : Type[WriteProtectionTypeVar],
+        *,
+        wps: bool,
+        cmp: bool,
+        sec: bool,
+        tb:  bool,
+        bp0: bool,
+        bp1: bool,
+        bp2: bool,
+        throwOnInvalidWriteProtectValue: Optional[bool] = False
+    ) -> WriteProtectionTypeVar: ...
+
+    @overload
+    @classmethod
+    def FromFields(
+        cls : Type[WriteProtectionTypeVar],
+        *,
+        wps: bool,
+        cmp: bool,
+        sec: bool,
+        tb:  bool,
+        bp:  int,
+        throwOnInvalidWriteProtectValue: Optional[bool] = False
+    ) -> WriteProtectionTypeVar: ...
+
+    @classmethod
+    def FromFields(
+        cls,
+        *,
+        wps: bool,
+        cmp: bool,
+        sec: bool,
+        tb: bool,
+        bp:  Optional[int]  = None,
+        bp0: Optional[bool] = None,
+        bp1: Optional[bool] = None,
+        bp2: Optional[bool] = None,
+        throwOnInvalidWriteProtectValue: Optional[bool] = False
+    ) -> WriteProtectionType:
+        """Construct from the individual fields"""
+        if bp is not None:
+            if bp < 0 or bp > 7:
+                raise ValueError("BP value must be between 0 and 7.")
+            if bp0 is not None or bp1 is not None or bp2 is not None:
+                raise ValueError("Cannot specify both BP and BP0/BP1/BP2")
+        elif bp0 is not None and bp1 is not None and bp2 is not None:
+            bp = (int(bp2) << 2) | (int(bp1) << 1) | int(bp0)
+        else:
+            raise ValueError("Must specify either BP or all of BP0/BP1/BP2")
+        if throwOnInvalidWriteProtectValue is None:
+            throwOnInvalidWriteProtectValue = False
+
+        if wps:
+            return cls.INDIVIDUAL_BLOCK_PROTECT
+
+        value = (int(wps) << 6) | (int(cmp) << 5) | (int(sec) << 4) | (int(tb) << 3) | bp
+        try:
+            return cls(value)
+        except ValueError:
+            if throwOnInvalidWriteProtectValue:
+                raise ValueError(f"Invalid combination of status register fields: WPS={wps}, CMP={cmp}, SEC={sec}, TB={tb}, BP={bp} (value=0b{value:07b}) does not correspond to a valid WriteProtectionType enum member.")
+            else:
+                return cls.NONE
+    #endregion FromStatusRegisters() and FromFields() factory methods
+
+
 
 StatusRegisters: TypeAlias = StatusRegister1 | StatusRegister2 | StatusRegister3
 
@@ -532,6 +764,8 @@ async def read_flash_with_callback(ctx : CommandContext, start_address : int, le
     # Always callback with final address to allow 100% progress indication
     if progress_callback is not None:
         await progress_callback(ctx, start_address + length)    
+
+
 
 #region _read_modify_write_flash_impl() -- untested helper function
 # async def _read_modify_write_flash_impl(address: int, data:bytes, ctx: CommandContext) -> None:
@@ -819,6 +1053,116 @@ async def set_write_protect_state(write_protection_type: WriteProtectionType, ct
     if not sr3.WPS and write_protection_type.WPS:
         sr3.WPS = True
         await write_status_register3(sr3, ctx)
+async def get_write_protect_state(ctx: CommandContext, throwOnInvalidWriteProtectValue: bool = False) -> WriteProtectionType:
+    sr1 : StatusRegister1 = await read_status_register(StatusRegisterType.SR1, ctx)
+    sr2 : StatusRegister2 = await read_status_register(StatusRegisterType.SR2, ctx)
+    sr3 : StatusRegister3 = await read_status_register(StatusRegisterType.SR3, ctx)
+    return WriteProtectionType.FromStatusRegisters(sr1=sr1, sr2=sr2, sr3=sr3, throwOnInvalidWriteProtectValue=throwOnInvalidWriteProtectValue)
+
+async def wps_global_unlock(ctx: CommandContext) -> None:
+    """Helper to set the global block unlock (i.e., set all WPS protected blocks to writable)."""
+    # BUGBUG -- Datasheet does not appear to _require_ that WPS=1 before sending this command?
+    #           However, this would require testing to verify the settings are not ignored.
+    #           Better to require caller ensures WPS=1 before allowing this action.
+    wpt : WriteProtectionType = await get_write_protect_state(ctx, throwOnInvalidWriteProtectValue=True)
+    if not wpt.WPS:
+        raise ValueError("Global block unlock can only be set if the current write protection state has WPS (write protection selection) enabled. Current write protection state: " + str(wpt))
+
+    await util_send_command("BEGIN", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command("DATA 06", ctx) # Write Enable
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command("DATA 98", ctx)
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("END", ctx)
+    await wait_for_flash_nonbusy(ctx)
+async def wps_global_lock(ctx: CommandContext) -> None:
+    """Helper to set the global block lock (i.e., set all WPS protected blocks to read-only)."""
+    # BUGBUG -- Datasheet does not appear to _require_ that WPS=1 before sending this command?
+    #           However, this would require testing to verify the settings are not ignored.
+    #           Better to require caller ensures WPS=1 before allowing this action.
+    wpt : WriteProtectionType = await get_write_protect_state(ctx, throwOnInvalidWriteProtectValue=True)
+    if not wpt.WPS:
+        raise ValueError("Global block unlock can only be set if the current write protection state has WPS (write protection selection) enabled. Current write protection state: " + str(wpt))
+
+    await util_send_command("BEGIN", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command("DATA 06", ctx) # Write Enable
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command("DATA 7E", ctx)
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("END", ctx)
+    await wait_for_flash_nonbusy(ctx)
+async def wps_lock_block(ctx:CommandContext, start_address: int) -> None:
+    """Helper to lock a single block via WPS=1 (i.e., set a specific 64K block to read-only)."""
+    # BUGBUG -- Datasheet does not appear to _require_ that WPS=1 before sending this command?
+    #           However, this would require testing to verify the settings are not ignored.
+    #           Better to require caller ensures WPS=1 before allowing this action.
+    wpt : WriteProtectionType = await get_write_protect_state(ctx, throwOnInvalidWriteProtectValue=True)
+    if not wpt.WPS:
+        raise ValueError("Block lock can only be set if the current write protection state has WPS (write protection selection) enabled. Current write protection state: " + str(wpt))
+
+    if (start_address % 0x10000) != 0:
+        raise ValueError(f"Start address must be aligned to 64K (0x10000) boundary (mask 0xFFFF). Given start address: 0x{start_address:06x}")
+
+    await util_send_command("BEGIN", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command("DATA 06", ctx) # Write Enable
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command(f"DATA 36 {((start_address >> 16) & 0xFF):02x} {((start_address >> 8) & 0xFF):02x} {(start_address & 0xFF):02x}", ctx)
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("END", ctx)
+    await wait_for_flash_nonbusy(ctx)
+async def wps_unlock_block(ctx:CommandContext, start_address: int) -> None:
+    """Helper to unlock a single block via WPS=1 (i.e., set a specific 64K block to read-write)."""
+    # BUGBUG -- Datasheet does not appear to _require_ that WPS=1 before sending this command?
+    #           However, this would require testing to verify the settings are not ignored.
+    #           Better to require caller ensures WPS=1 before allowing this action.
+    wpt : WriteProtectionType = await get_write_protect_state(ctx, throwOnInvalidWriteProtectValue=True)
+    if not wpt.WPS:
+        raise ValueError("Block lock can only be set if the current write protection state has WPS (write protection selection) enabled. Current write protection state: " + str(wpt))
+
+    if (start_address % 0x10000) != 0:
+        raise ValueError(f"Start address must be aligned to 64K (0x10000) boundary (mask 0xFFFF). Given start address: 0x{start_address:06x}")
+
+    await util_send_command("BEGIN", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command("DATA 06", ctx) # Write Enable
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("ASSERT", ctx)
+    await util_send_command(f"DATA 39 {((start_address >> 16) & 0xFF):02x} {((start_address >> 8) & 0xFF):02x} {(start_address & 0xFF):02x}", ctx)
+    await util_send_command("RELEASE", ctx)
+    await util_send_command("END", ctx)
+    await wait_for_flash_nonbusy(ctx)
+async def wps_is_block_locked(ctx:CommandContext, start_address: int) -> bool:
+    """Helper to check if a single block is locked via WPS=1 (i.e., check if a specific 64K block is read-only)."""
+    # BUGBUG -- Datasheet does not appear to _require_ that WPS=1 before sending this command?
+    #           However, this would require testing to verify the settings are not ignored.
+    #           Better to require caller ensures WPS=1 before allowing this action.
+    wpt : WriteProtectionType = await get_write_protect_state(ctx, throwOnInvalidWriteProtectValue=True)
+    if not wpt.WPS:
+        raise ValueError("Block lock state can only be checked if the current write protection state has WPS (write protection selection) enabled. Current write protection state: " + str(wpt))
+
+    if (start_address % 0x10000) != 0:
+        raise ValueError(f"Start address must be aligned to 64K (0x10000) boundary (mask 0xFFFF). Given start address: 0x{start_address:06x}")
+
+    l = await util_send_command("BEGIN", ctx)
+    l = await util_send_command("ASSERT", ctx)
+    l = await util_send_command(f"DATA 3D {((start_address >> 16) & 0xFF):02x} {((start_address >> 8) & 0xFF):02x} {(start_address & 0xFF):02x}", ctx)
+    l = await util_send_command("DATA 00", ctx) # dummy byte to read the status
+    if len(l) != 1:
+        raise ValueError(f"Unexpected response length: {len(l)} lines (expected 1)")
+    hex_chars = l[0].split()
+    if len(hex_chars) != 1:
+        raise ValueError(f"Unexpected response format: {l[0]} (expected 1 hex byte)")
+    status = int(hex_chars[0], 16)
+    l = await util_send_command("RELEASE", ctx)
+    l = await util_send_command("END", ctx)
+    return (status != 0)
+
 
 async def is_pkcs7_padding_valid(data: bytes) -> bool:
     if len(data) < 16:
@@ -1010,9 +1354,78 @@ async def cmd_reboot(args: str, ctx: CommandContext) -> None:
     await util_send_command("REBOOT", ctx)
 async def cmd_solve(args: str, ctx: CommandContext) -> None:
     await util_send_command("SOLVE", ctx)
+async def cmd_wp(args: str, ctx: CommandContext) -> None:
+    """Manipulate block-by-block write protection state
 
+    Usage::
+        wp <enable | disable>
+        wp <lock | unlock> <all | address>
+        wp get <address>
 
-
+    Where <address> is the starting address of the 64K block to lock/unlock (must be multiple of 0x10000)
+"""
+    with ctx.shell.suppress_serial_output():
+        text = args.strip().split()
+        if len(text) == 1 and text[0] == "enable":
+            await set_write_protect_state(WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT, ctx)
+            ctx.print_info("Write protection set to INDIVIDUAL_BLOCK_PROTECT (each block can be individually set to read-only or read-write).")
+            return
+        if len(text) == 1 and text[0] == "disable":
+            await set_write_protect_state(WriteProtectionType.NONE, ctx)
+            ctx.print_info("Write protection set to NONE (no write protection).")
+            return
+        if len(text) == 2 and text[0] == "lock" and text[1] == "all":
+            await wps_global_lock(ctx)
+            ctx.print_info("Global block lock set (all WPS-protected blocks set to read-only).")
+            return
+        if len(text) == 2 and text[0] == "unlock" and text[1] == "all":
+            await wps_global_unlock(ctx)
+            ctx.print_info("Global block unlock set (all WPS-protected blocks set to read-write).")
+            return
+        if len(text) == 2 and text[0] == "get":
+            try:
+                address = int(text[1], 0)
+            except ValueError:
+                ctx.print_error("Invalid address.")
+                return
+            if address % 0x10000 != 0:
+                ctx.print_error("Address must be aligned to 0x10000 byte boundary.")
+                return
+            is_locked = await wps_is_block_locked(ctx, address)
+            ctx.print_info(f"64K block starting at address 0x{address:06x} is {'locked' if is_locked else 'unlocked'}.")
+            return
+        if len(text) == 2 and text[0] == "lock":
+            try:
+                address = int(text[1], 0)
+            except ValueError:
+                ctx.print_error("Invalid address.")
+                return
+            if address % 0x10000 != 0:
+                ctx.print_error("Address must be aligned to 0x10000 byte boundary.")
+                return
+            await wps_lock_block(ctx, address)
+            ctx.print_info(f"Block lock set for 64K block starting at address 0x{address:06x} (that block set to read-only).")
+            return
+        if len(text) == 2 and text[0] == "unlock":
+            try:
+                address = int(text[1], 0)
+            except ValueError:
+                ctx.print_error("Invalid address.")
+                return
+            if address % 0x10000 != 0:
+                ctx.print_error("Address must be aligned to 0x10000 byte boundary.")
+                return
+            await wps_unlock_block(ctx, address)
+            ctx.print_info(f"Block unlock set for 64K block starting at address 0x{address:06x} (that block set to read-write).")
+            return
+        
+            print_wp_help()
+            return
+        
+        # Else not a supported command variation, so print help
+        ctx.print_error("Usage: wp <enable | disable>")
+        ctx.print_error("Usage: wp <lock | unlock | get> <all | address>")
+        return
 
 # ---------------------------------------------------------------------------
 # FIN
