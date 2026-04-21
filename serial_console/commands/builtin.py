@@ -32,21 +32,6 @@ def register_builtin_commands(registry: CommandRegistry) -> None:
         usage="quit", category="Built‑in",
     )
     registry.register(
-        "q", cmd_quit,
-        "Exit the console (alias for quit)",
-        usage="quit", category="Built‑in",
-    )
-    registry.register(
-        "x", cmd_quit,
-        "Exit the console (alias for quit)",
-        usage="quit", category="Built‑in",
-    )
-    registry.register(
-        "exit", cmd_quit,
-        "Exit the console (alias for quit)",
-        usage="exit", category="Built‑in",
-    )
-    registry.register(
         "connect", cmd_connect,
         "Connect to a serial port",
         usage="connect <port> [baudrate]", category="Serial",
@@ -77,6 +62,33 @@ def register_builtin_commands(registry: CommandRegistry) -> None:
         "Configure the logging subsystem",
         usage="log <start|stop|status> [options]", category="Logging",
     )
+    # Aliases for the above commands ... might be worthwhile explicitly supporting aliases to avoid this duplication?
+    registry.register(
+        "h", cmd_help,
+        "(alias for help)",
+        usage="h [command]", category="Built‑in",
+    )
+    registry.register(
+        "?", cmd_help,
+        "(alias for help)",
+        usage="? [command]", category="Built‑in",
+    )
+    registry.register(
+        "q", cmd_quit,
+        "Exit the console (alias for quit)",
+        usage="q", category="Built‑in",
+    )
+    registry.register(
+        "x", cmd_quit,
+        "(alias for quit)",
+        usage="x", category="Built‑in",
+    )
+    registry.register(
+        "exit", cmd_quit,
+        "(alias for quit)",
+        usage="exit", category="Built‑in",
+    )
+
 
 
 # ---------------------------------------------------------------------------
