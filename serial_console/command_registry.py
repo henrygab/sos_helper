@@ -20,27 +20,10 @@ Design decisions
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .app import Application
-
-
-# ---------------------------------------------------------------------------
-# Data model
-# ---------------------------------------------------------------------------
-
-@dataclass
-class CommandInfo:
-    """Metadata for a single registered command."""
-
-    name: str
-    handler: Callable  # async (args: str, ctx: CommandContext) -> None
-    help_text: str
-    usage: str = ""
-    category: str = "General"
-    completions: Optional[Callable[[], List[str]]] = None
-
 
 # ---------------------------------------------------------------------------
 # Context passed to handlers
@@ -88,6 +71,31 @@ class CommandContext:
 
 
 # ---------------------------------------------------------------------------
+# Callback function type
+# ---------------------------------------------------------------------------
+
+
+CommandHandler = Callable[[str, CommandContext], Awaitable[None]]
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CommandInfo:
+    """Metadata for a single registered command."""
+
+    name: str
+    handler: CommandHandler  # async (args: str, ctx: CommandContext) -> None
+    help_text: str
+    usage: str = ""
+    category: str = "General"
+    completions: Optional[Callable[[], List[str]]] = None
+
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -102,7 +110,7 @@ class CommandRegistry:
     def register(
         self,
         name: str,
-        handler: Callable,
+        handler: CommandHandler,
         help_text: str,
         usage: str = "",
         category: str = "General",

@@ -7,12 +7,7 @@ to enjoy the challenge of the CTF on your own!
 
 from __future__ import annotations
 
-import asyncio
-from binascii import Error
-
 from ..command_registry import CommandContext, CommandRegistry
-from enum import Enum
-from typing import Literal, Sequence, Tuple, overload, TypeAlias
 from . import sword_of_secrets            as sos
 from . import sword_of_secrets_spoilers_1 as sos1
 from . import sword_of_secrets_spoilers_2 as sos2
@@ -34,12 +29,12 @@ def register_sword_of_secrets_spoilers_4(registry: CommandRegistry) -> None:
         usage="sos4_1_brute_initial_padding",
         category="Sword of Secrets - Stage 4 Spoilers",
     )
-    # registry.register(
-    #     "sos4_autosolve", cmd_sos4_autosolve,
-    #     "Writes the solution for stage 4 to the flash on the device.",
-    #     usage="sos4_autosolve",
-    #     category="Sword of Secrets - Stage 4 Spoilers",
-    # )
+    registry.register(
+        "sos4_autosolve", cmd_sos4_autosolve,
+        "Writes the solution for stage 4 to the flash on the device.",
+        usage="sos4_autosolve",
+        category="Sword of Secrets - Stage 4 Spoilers",
+    )
 
 # ---------------------------------------------------------------------------
 # Global (const) data
@@ -110,28 +105,29 @@ STAGE4_THREE_AES_BLOCKS_WITH_FULL_BLOCK_PADDING = bytes(
     b'\x5a\x26\xdb\x1d\x71\xf3\xcf\x11' +
 
     # Second AES block of ciphertext will decrypt unpredictably
-    b'\xca\x46\x1e\x41\x2b\xbb\x99\x3b' +
-    b'\xcc\xa0\x04\xbf\xa6\x21\x64\xa1' +
+    b'\xe9\x43\x52\x99\x70\x7f\x94\x57'
+    b'\x44\xd3\x54\x5d\xcd\x75\x33\xa3'
 
-    # Third AES block of ciphertext is chosen as all zero
-    b'\x00' * 0x10
+    # Third AES block is vanity data
+    b'\x68\x65\x6e\x72\x79\x67\x61\x62'
+    b'\x68\x65\x6e\x72\x79\x67\x61\x62'
 )
 
 STAGE4_REPLACEMENT_CIPHERTEXT = bytes(
     b'\x8e\x3c\x5a\xf5\x56\x82\xd4\x0c' + # * Padding oracle cannot be used to predictably modify the
     b'\x5a\x26\xdb\x1d\x71\xf3\xcf\x11' + #   the first AES block, so keep original values.
-    b'\x58\xc1\x0f\x14\x2a\xaa\x0b\x6b' + # * Second AES block will decrypt to unpredictable values,     
-    b'\x5e\x30\x12\xa9\xb0\x37\x72\xb7' + #   OK because BF script will change the jump to skip over these...
-    b'\x00' * 0x10                        # * Final ciphertext will decrypt to desired instructions
+    b'\x7b\xc4\x43\xcc\x71\x6e\x06\x07' + # * Second AES block will decrypt to unpredictable values,     
+    b'\xd6\x43\x42\x4b\xdb\x63\x25\xb5' + #   OK because BF script will change the jump to skip over these...
+    b'\x68\x65\x6e\x72\x79\x67\x61\x62' + # * Final AES block is vanity data
+    b'\x68\x65\x6e\x72\x79\x67\x61\x62'
 )
 
-
 STAGE4_BF_SCRIPT = bytes(
-    b'>' * 0x110 + # skip from data[0] to code[0]
-    b'>' *   0xE + # skip to the first byte of the target instruction (0x11)
-    b'-' *   0x8 + # change that first byte from 0x11 -> 0x09 (-8)
-    b'>' *   0x1 + # goto the second byte of the instruction (0xe7)
-    b'+' *   0x4   # change that second byte from 0xe7 -> 0xeb (+4)
+    b'>' * 0x110 + # 0x3e: skip from data[0] to code[0]
+    b'>' *   0xE + # 0x3e: goto first byte of the target instruction
+    b'-' *   0x8 + # 0x2d: 0x11 --> 0x09 (-8)
+    b'>' *   0x1 + # 0x3e: goto the second byte of the instruction
+    b'+' *   0x4   # 0x2b: 0xE7 --> 0xeb (+4)
 ) #     299 bytes ... well shy of 512 byte maximum script size
 
 # ---------------------------------------------------------------------------
@@ -140,13 +136,44 @@ STAGE4_BF_SCRIPT = bytes(
 
 async def write_stage4_solution(ctx: CommandContext) -> None:
     """Helper to write the stage 4 solution to the device."""
-    await sos.erase_flash_4k(0x40000, ctx)
+    old_wpt_state = await sos.get_write_protect_state(ctx)
+    block_0x40000_was_locked = False
+    block_0x50000_was_locked = False
+    new_wpt_state = old_wpt_state
 
-    raise NotImplementedError("This function is not implemented yet.")
-    # NOT YET IMPLEMENTED -- need validated replacement function ciphertext
-    # await sos.write_flash(0x40000, STAGE4_REPLACEMENT_FUNCTION_ENC, ctx)
+    #region unlock the blocks if write protection is currently enabled for them
+    if old_wpt_state == sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT:
+        block_0x40000_was_locked = await sos.wps_is_block_locked(ctx, 0x40000)
+        block_0x50000_was_locked = await sos.wps_is_block_locked(ctx, 0x50000)
+        if block_0x40000_was_locked:
+            await sos.wps_unlock_block(ctx, 0x40000)
+        if block_0x50000_was_locked:
+            await sos.wps_unlock_block(ctx, 0x50000)
+    elif old_wpt_state.LowestProtectedAddress is None or old_wpt_state.HighestProtectedAddress is None:
+        pass
+    elif old_wpt_state.LowestProtectedAddress >= 0x60000 or old_wpt_state.HighestProtectedAddress < 0x40000:
+        pass
+    else:
+        await sos.set_write_protect_state(sos.WriteProtectionType.NONE, ctx)
+        new_wpt_state = sos.WriteProtectionType.NONE
+    #endregion unlock the blocks if write protection is currently enabled for them
+
+    #region erase/write 0x40000 and 0x50000
+    await sos.erase_flash_4k(0x40000, ctx)
     await sos.erase_flash_4k(0x50000, ctx)
+
+    await sos.write_flash_with_length_prefix(0x40000, STAGE4_REPLACEMENT_CIPHERTEXT, ctx)
     await sos.write_flash(0x50000, STAGE4_BF_SCRIPT, ctx)
+    #endregion erase/write 0x40000 and 0x50000
+
+    #region restore write protection state if it was modified
+    if new_wpt_state != old_wpt_state:
+        await sos.set_write_protect_state(old_wpt_state, ctx)
+    if block_0x40000_was_locked:
+        await sos.wps_unlock_block(ctx, 0x40000)
+    if block_0x50000_was_locked:
+        await sos.wps_unlock_block(ctx, 0x50000)
+    #endregion restore write protection state if it was modified
     ctx.print_info("Stage 4 solution written to flash at addresses 0x40000 and 0x50000.")
 
 # ---------------------------------------------------------------------------
@@ -243,34 +270,31 @@ async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
     # This function will ensure all the prerequisites are in place to be able to
     # run a BF script that can dump bytes from RAM, without needing to reboot
     # between each execution of the BF script.
-    #
-    # There are many pre-requisites to be able to run this code:
-    # * [x] Stage 1 solved
-    # * [x] Stage 2 solved
-    # * [x] Stage 3 solved
-    # * [x] Stage 4 - modified `code` ciphertext written to flash at 0x40000
-    # * [ ] Stage 4 - write-protection enabled for flash (to prevent `code` being overwritten)
-            # just write-protecting the entire thing works fine, but maybe it's better to use WPS=1?
-            #
-            # Set WPS=1, which defaults to all blocks being write-protected until unlocked
-            #
-            # Check for support of the following commands, when WPS=1:
-            # * 06h WRITE_ENABLE + 98h GLOBAL_BLOCK_SECTOR_UNLOCK
-            # * 06h WRITE_ENABLE + 7Eh GLOBAL_BLOCK_SECTOR_LOCK
-            # * 06h WRITE_ENABLE + 39h INDIVIDUAL_BLOCK_UNLOCK
-            # * 06h WRITE_ENABLE + 36h INDIVIDUAL_BLOCK_LOCK
-            # 
-    # * [ ] Stage 4 - `REBOOT` with write-protection enabled
-    # * [ ] Stage 4 - write-protection for at least 0x50000 disabled
-    # * [ ] Stage 4 - BF script to update `code` written to 0x50000
-    # * [ ] Stage 4 - `SOLVE` executed once ... modifies `code` to not crash
-    # * [ ] Stage 4 - BF script erased
-    # * [ ] Function to parse the output of `SOLVE` to extract the BF-dumped data
     with ctx.shell.suppress_serial_output():
+        ctx.print("Ensuring prerequisites for running BF script to dump RAM bytes...")
+        ctx.print("Writing solutions for stages 1-3")
         await sos1.write_stage1_solution(ctx)
         await sos2.write_stage2_solution(ctx)
         await sos3.cmd_sos3_autosolve(args="", ctx=ctx)
-    raise NotImplementedError("This function is not implemented yet.")
+        ctx.print("Writing replacements 'code' ciphertext for stage 4")
+        await write_stage4_solution(ctx)
+        ctx.print("Ensuring WPS=1 (write protection per 64k-block)")
+        old_wp_state = await sos.get_write_protect_state(ctx)
+        if old_wp_state != sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT:
+            await sos.set_write_protect_state(sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT, ctx)
+        ctx.print("Ensuring all blocks except 0x40000 are locked via WPS=1")
+        await sos.wps_global_unlock(ctx)
+        await sos.wps_lock_block(ctx, 0x40000)
+        ctx.print("Rebooting with locked `code` ciphertext")
+        await sos.util_send_command("REBOOT", ctx)
+        ctx.print("Writing BF script to alter branch instruction in `code` (avoid lockup/crash)")
+        await sos.erase_flash_4k(0x50000, ctx)
+        await sos.write_flash(0x50000, STAGE4_BF_SCRIPT, ctx)
+        ctx.print("Executing BF script once");
+        await sos.util_send_command("SOLVE", ctx)
+        ctx.print("Erasing BF script from flash (cleanup)")
+        await sos.erase_flash_4k(0x50000, ctx)
+        ctx.print("Done!")
 
 async def read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx: CommandContext) -> bytearray:
     await ensure_bf_dump_prerequisites(ctx)
@@ -279,6 +303,9 @@ async def read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx: CommandCont
     # Although `tape` starts at 0x2000'00F4, and having 0x200 bytes of BF script space would
     # technically allow reading back as far as 0x1FFF'FEF5 (0x2000'00F4 - 0x1FF), this code
     # will return data starting from 0x2000'0000 because it's the start of the RAM area.
+
+    # Not yet implemented due to requirement of:
+    # * [ ] Function to parse the output of `SOLVE` to extract the BF-dumped data
     raise NotImplementedError("This function is not implemented yet.")
 
 async def read_all_accessible_bytes_following_tape_via_bf_script(ctx: CommandContext) -> bytearray:
@@ -290,11 +317,24 @@ async def read_all_accessible_bytes_following_tape_via_bf_script(ctx: CommandCon
     # This leaves 0x100 bytes of BF script, of which at least one (last) byte must be b'.'
     # to dump the data at that final location, leaving a maximum of 0xFF bytes that can
     # be read following the `tape` variable.
+
+    # Not yet implemented due to requirement of:
+    # * [ ] Function to parse the output of `SOLVE` to extract the BF-dumped data
     raise NotImplementedError("This function is not implemented yet.")
 
 # ---------------------------------------------------------------------------
 # Commands registered with serial console
 # ---------------------------------------------------------------------------
+
+async def cmd_sos4_autosolve(args: str, ctx: CommandContext) -> None:
+    if args.strip() != "":
+        raise ValueError(f"Unexpected argument: `{args.strip()}` (expected empty)")
+    with ctx.shell.suppress_serial_output():
+        await write_stage4_solution(ctx)
+        await sos.set_write_protect_state(sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT, ctx)
+        await sos.wps_global_unlock(ctx)
+        await sos.wps_lock_block(ctx, 0x40000)
+    ctx.print("Stage 4 solution ... `code` block locked, BF script can execute once per boot for SOLVE")
 
 async def cmd_sos4_1_replace_code_ciphertext(args: str, ctx: CommandContext) -> None:
     quick_mode = False
