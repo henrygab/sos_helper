@@ -35,6 +35,24 @@ def register_sword_of_secrets_spoilers_4(registry: CommandRegistry) -> None:
         usage="sos4_autosolve",
         category="Sword of Secrets - Stage 4 Spoilers",
     )
+    registry.register(
+        "sos4_bf_prep", cmd_sos4_prepare_for_BF_data_dump,
+        "Prepares the device for running sos4_bf_dump",
+        usage="sos4_bf_prep",
+        category="Sword of Secrets - Stage 4 Spoilers",
+    )
+    registry.register(
+        "sos4_bf_dump", cmd_sos4_bf_dump,
+        "Runs a BF script to dump bytes from RAM (either before or after the `tape` variable)",
+        usage="sos4_bf_dump <before|after|both>",
+        category="Sword of Secrets - Stage 4 Spoilers",
+    )
+    registry.register(
+        "full_solution", cmd_full_solution,
+        "Times solving the entire Sword of Secrets from start to finish.",
+        usage="full_solution",
+        category="Sword of Secrets",
+    )
 
 # ---------------------------------------------------------------------------
 # Global (const) data
@@ -282,8 +300,9 @@ async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
         old_wp_state = await sos.get_write_protect_state(ctx)
         if old_wp_state != sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT:
             await sos.set_write_protect_state(sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT, ctx)
-        ctx.print("Ensuring all blocks except 0x40000 are locked via WPS=1")
+        ctx.print("Ensuring no blocks are locked while WPS=1")
         await sos.wps_global_unlock(ctx)
+        ctx.print("Locking block 0x40000 while WPS=1")
         await sos.wps_lock_block(ctx, 0x40000)
         ctx.print("Rebooting with locked `code` ciphertext")
         await sos.util_send_command("REBOOT", ctx)
@@ -296,13 +315,79 @@ async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
         await sos.erase_flash_4k(0x50000, ctx)
         ctx.print("Done!")
 
+async def parse_bf_dump_output_and_extract_bytes(lines: List[str]) -> bytearray:
+
+    # success output lines always look like:
+    # lines[0]: MAGICLIB{No one can break this! 0x20000}
+    # lines[1]: MAGICLIB{53Cr37 5745H: 0x30000}
+    # lines[2]: MAGICLIB{Passwd: 53R37 0x50000}
+    # lines[3]: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 FLAG{The secrets of the swords are revealed!}
+    # lines[4]: THE SECRET IS REVEALED!
+    #
+    # except that lines[3] may contain between 1..16 bytes of hex data before "FLAG",
+    # and the hex data is anything that legally outputs from '%02x ' format string for a single byte.
+    #
+    if len(lines) != 5:
+        raise ValueError(f"Unexpected number of lines in BF dump output: {len(lines)} (expected 5)")
+    if lines[0] != "MAGICLIB{No one can break this! 0x20000}":
+        raise ValueError(f"Unexpected line 0 in BF dump output: {lines[0]!r} (expected 'MAGICLIB{{No one can break this! 0x20000}}')")
+    if lines[1] != "MAGICLIB{53Cr37 5745H: 0x30000}":
+        raise ValueError(f"Unexpected line 1 in BF dump output: {lines[1]!r} (expected 'MAGICLIB{{53Cr37 5745H: 0x30000}}')")
+    if lines[2] != "MAGICLIB{Passwd: 53R37 0x50000}":
+        raise ValueError(f"Unexpected line 2 in BF dump output: {lines[2]!r} (expected 'MAGICLIB{{Passwd: 53R37 0x50000}}')")
+    if lines[4] != "THE SECRET IS REVEALED!":
+        raise ValueError(f"Unexpected line 4 in BF dump output: {lines[4]!r} (expected 'THE SECRET IS REVEALED!')")
+
+    # Trim the non-hex postfix from line 3.
+    line3_postfix = "FLAG{The secrets of the swords are revealed!}"
+    if not lines[3].endswith(line3_postfix):
+        raise ValueError(f"Unexpected line 3 in BF dump output: {lines[3]!r} (expected to end with {line3_postfix!r})")
+    line3_hex_parts = lines[3][0:-len(line3_postfix)].trim().split(' ')
+
 async def read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx: CommandContext) -> bytearray:
-    await ensure_bf_dump_prerequisites(ctx)
     # Returns 0xFE bytes that preceed the `tape` variable in RAM.
     #
     # Although `tape` starts at 0x2000'00F4, and having 0x200 bytes of BF script space would
     # technically allow reading back as far as 0x1FFF'FEF5 (0x2000'00F4 - 0x1FF), this code
     # will return data starting from 0x2000'0000 because it's the start of the RAM area.
+    #
+    # await check_bf_dump_prerequisites(ctx)
+
+    tape_start : int = 0x200000F4
+    dump_start : int = 0x20000000
+    results = bytearray()
+    
+
+    with ctx.shell.suppress_serial_output():
+
+        # this can be done in a single BF script ... but might exceed firmware's output line limit
+        target_address = dump_start
+        bytes_to_dump : int = 0
+
+        while target_address < tape_start:
+            bytes_to_dump = min(0x10, tape_start - target_address)
+            instructions_to_reach_target = (target_address - tape_start)
+            # each byte to be dumped takes two BF instructions, but can skip the final instruction
+            # (which simply increments to the next memory location)
+            bytes_to_dump = min(bytes_to_dump, (512 + 1 - instructions_to_reach_target) // 2)
+
+            bf_script : bytes = bytes(
+                b'<' * instructions_to_reach_target + # skip from data[0] to target address
+                b'.>' * (bytes_to_dump - 1)         + # dump the byte and skip to the next byte
+                b'.'                                  # dumps the final byte
+            )
+
+            await sos.erase_flash_4k(0x50000, ctx)
+            await sos.write_flash(0x50000, bf_script, ctx)
+            lines = await sos.util_send_command("SOLVE", ctx)
+
+            # TODO: parse the lines of output and append to bytearray result
+            for i, l in enumerate(lines):
+                ctx.print(f"Line {i:02d}: {l}")
+            ctx.print("")
+
+            target_address += bytes_to_dump
+
 
     # Not yet implemented due to requirement of:
     # * [ ] Function to parse the output of `SOLVE` to extract the BF-dumped data
@@ -351,6 +436,77 @@ async def cmd_sos4_1_replace_code_ciphertext(args: str, ctx: CommandContext) -> 
         await sos3.cmd_sos3_autosolve(args="", ctx=ctx)
         ctx.print("Stage 3 solution restored")
         ctx.print("This is only a small part of the solution....")
+
+async def cmd_sos4_prepare_for_BF_data_dump(args: str, ctx: CommandContext) -> None:
+    if args.strip() != "":
+        raise ValueError(f"Unexpected argument: `{args.strip()}` (expected empty)")
+    with ctx.shell.suppress_serial_output():
+        await ensure_bf_dump_prerequisites(ctx)
+
+async def cmd_sos4_bf_dump(args: str, ctx: CommandContext) -> None:
+    args = args.strip()
+    dumpBeforeTape : bool = False
+    dumpAfterTape  : bool = False
+    if args == "before":
+        dumpBeforeTape = True
+    elif args == "after":
+        dumpAfterTape = True
+    elif args == "both":
+        dumpBeforeTape = True
+        dumpAfterTape  = True
+    else:
+        raise ValueError(f"Unexpected argument: `{args.strip()}` (expected `before`, `after`, or `both`)")
+
+    with ctx.shell.suppress_serial_output():
+        if dumpBeforeTape:
+            data_before_tape = await read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx)
+            ctx.print("Data before `tape`:")
+            await sos.util_hex_dump(ctx, data_before_tape, base_address=0x20000000)
+        if dumpAfterTape:
+            data_after_tape = await read_all_accessible_bytes_following_tape_via_bf_script(ctx)
+            ctx.print("Data after `tape`:")
+            await sos.util_hex_dump(ctx, data_after_tape,  base_address=0x200001F4)
+
+async def cmd_full_solution(args: str, ctx: CommandContext) -> None:
+    if args.strip() != "":
+        raise ValueError(f"Unexpected argument: `{args.strip()}` (expected empty)")
+    with ctx.shell.suppress_serial_output():
+        with sos.util_timer(ctx, "Erase/Reset device to prepare for full solution"):
+            await sos.set_write_protect_state(sos.WriteProtectionType.NONE, ctx)
+            await sos.erase_flash_4k(0x10000, ctx)
+            await sos.erase_flash_4k(0x20000, ctx)
+            await sos.erase_flash_4k(0x30000, ctx)
+            await sos.erase_flash_4k(0x40000, ctx)
+            await sos.erase_flash_4k(0x50000, ctx)
+            await sos.util_send_command("RESET", ctx)
+        ctx.print("")
+        ctx.print("writing solutions for stages 1-4")
+        with sos.util_timer(ctx, "Solving Sword of Secrets from start to finish"):
+            await sos1.write_stage1_solution(ctx)
+            await sos2.write_stage2_solution(ctx)
+            await sos3.cmd_sos3_full_solution(args="", ctx=ctx)
+            await cmd_sos4_1_replace_code_ciphertext(args="", ctx=ctx)
+
+            ctx.print("Ensuring WPS=1 (write protection per 64k-block)")
+            old_wp_state = await sos.get_write_protect_state(ctx)
+            if old_wp_state != sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT:
+                await sos.set_write_protect_state(sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT, ctx)
+            ctx.print("Ensuring no blocks are locked while WPS=1")
+            await sos.wps_global_unlock(ctx)
+            ctx.print("Locking block 0x40000 while WPS=1")
+            await sos.wps_lock_block(ctx, 0x40000)
+            ctx.print("Rebooting with locked `code` ciphertext")
+            await sos.util_send_command("REBOOT", ctx)
+            ctx.print("Writing BF script to alter branch instruction in `code` (avoid lockup/crash)")
+            await sos.erase_flash_4k(0x50000, ctx)
+            await sos.write_flash(0x50000, STAGE4_BF_SCRIPT, ctx)
+            ctx.print("Executing BF script once via SOLVE command");
+            l = await sos.util_send_command("SOLVE", ctx)
+            for line in l:
+                ctx.print(line)
+            ctx.print("Done!")
+
+
 
 # ---------------------------------------------------------------------------
 # FIN
