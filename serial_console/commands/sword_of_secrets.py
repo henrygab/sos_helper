@@ -701,6 +701,15 @@ class ReadFlashDataChunkCallback(Protocol):
 class ReadFlashProgressCallback(Protocol):
     async def __call__(self, ctx: CommandContext, address_read_through_exclusive: int) -> None: ...
 
+class SpiFlashWriteVerificationError(ValueError):
+    """Exception raised when writing data but does not read back as written."""
+    def __init__(self, message: str, *, write_address: int, expected_data: bytes, actual_data: bytes):
+        super().__init__(message)
+        self.write_address = write_address
+        self.expected_data = expected_data
+        self.actual_data   = actual_data
+
+
 async def read_flash_with_callback(ctx : CommandContext, start_address : int, length : int, data_callback : ReadFlashDataChunkCallback, progress_callback : ReadFlashProgressCallback | None = None, chunk_size : int = 0x10) -> None:
 
     if chunk_size < 0x10 or chunk_size > 0x10000:
@@ -851,14 +860,21 @@ async def _write_flash_impl(address:int, data:bytes, ctx: CommandContext) -> Non
     if True:
         read_back = await read_flash(address, len(data), ctx)
         if read_back != data:
-            raise ValueError("Verification failed: data read back does not match data written.")
+            raise SpiFlashWriteVerificationError(
+                "Verification failed: data read back does not match data written.",
+                write_address=address,
+                expected_data = data,
+                actual_data = read_back
+                )
 
 # NOTE: This function will erase 4k on failed write; set max_retries to zero to disable this.
 async def write_flash(address: int, data: bytes, ctx: CommandContext, max_retries: int = 5) -> None:
     """Helper to write flash data to the device, with erase + write retry on failure."""
-    if (address % 0x1000) != 0:
+    if (max_retries == 0 and (address % 0x100) != 0):
+        raise ValueError(f"Even when max_retries is 0, address must be aligned to 256-byte boundary (mask 0xFF).")
+    elif (max_retries != 0 and (address % 0x1000) != 0):
         raise ValueError(f"Address must be aligned to 4K (0x1000) boundary (mask 0xFFF).")
-    for attempt in range(max_retries):
+    for attempt in range(max_retries+1):
         try:
             for i in range(0, len(data), 256):
                 chunk_address = address + i
@@ -868,7 +884,7 @@ async def write_flash(address: int, data: bytes, ctx: CommandContext, max_retrie
         except (ValueError, Error) as e:
             ctx.print_error(f"Write attempt {attempt+1} failed: {e}")
             if attempt < max_retries:
-                ctx.print_info("Retrying...")
+                ctx.print_info("Retrying w/erase...")
                 # NO, it is NOT normally a good idea to erase larger area on write.
                 # For SoS usage, it's fine as we always write on 4K boundary
                 erase_address = address & ~0xFFF # align down to 4K boundary
@@ -1176,6 +1192,23 @@ async def is_pkcs7_padding_valid(data: bytes) -> bool:
         return False
     return True
 
+@overload
+async def get_padding_for_cleartext(plaintext_length_or_data: int) -> bytes: ...
+@overload
+async def get_padding_for_cleartext(plaintext_length_or_data: bytes | bytearray | memoryview) -> bytes: ...
+
+async def get_padding_for_cleartext(plaintext_length_or_data: int | bytes | bytearray | memoryview) -> bytes:
+    if isinstance(plaintext_length_or_data, int):
+        plaintext_length = plaintext_length_or_data
+    else:
+        plaintext_length = len(plaintext_length_or_data)
+
+    padding_value = 16 - (plaintext_length % 16)
+    if padding_value == 0:
+        padding_value = 16
+    return bytes([padding_value] * padding_value)
+
+
 # ---------------------------------------------------------------------------
 # Commands registered with serial console
 # ---------------------------------------------------------------------------
@@ -1322,8 +1355,9 @@ async def cmd_write_flash(args: str, ctx: CommandContext) -> None:
         return
     
     with ctx.shell.suppress_serial_output():
-        await write_flash(address, data, ctx)
+        await write_flash(address, data, ctx, max_retries = 0)
         ctx.print_info(f"Wrote {len(data)} bytes to 0x{address:06x}.")
+
 async def cmd_erase_flash_4k(args: str, ctx: CommandContext) -> None:
     """Erase a 4K block of flash.
 
