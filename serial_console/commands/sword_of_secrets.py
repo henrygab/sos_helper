@@ -15,7 +15,7 @@ from binascii import Error
 
 from ..command_registry import CommandContext, CommandRegistry
 from enum import Enum
-from typing import Literal, Optional, Sequence, Tuple, Type, TypeVar, overload, TypeAlias, Protocol
+from typing import List, Literal, Optional, Sequence, Tuple, Type, TypeVar, overload, TypeAlias, Protocol
 
 # ---------------------------------------------------------------------------
 # Registration entry point
@@ -639,6 +639,18 @@ async def util_hex_dump(ctx: CommandContext, data: bytes, base_address: int = 0)
         hex_bytes = ' '.join(f"{b:02x}" for b in chunk)
         ascii_bytes = ''.join((chr(b) if 32 <= b <= 126 else '.') for b in chunk)
         ctx.print(f"{base_address + i:06x}  {hex_bytes:<48}  {ascii_bytes}")
+
+async def util_hex_dump_for_python(ctx: CommandContext, data: bytes) -> List[str]:
+    """Return a list of strings representing the bytes formatted as a Python bytes literal."""
+    result : list[str] = []
+    result.append('bytes(')
+    for i in range(0, len(data), 16):
+        chunk = data[i:i+0x10]
+        hex_str = '    b\'' + ''.join(f"\\x{b:02x}" for b in chunk) + '\''
+        result.append(hex_str)
+    result.append(')')
+    return result
+
 
 async def util_send_command(args: str, ctx: CommandContext) -> list[str]:
     """Helper to send a command and wait for the prompt (which indicates the command has completed)."""
@@ -1422,6 +1434,11 @@ async def cmd_wp(args: str, ctx: CommandContext) -> None:
             except ValueError:
                 ctx.print_error("Invalid address.")
                 return
+            if address < 0:
+                ctx.print_error("Address must be non-negative.")
+                return
+            if address < 0x100:
+                address = address * 0x10000 # allow specifying block number instead of address, for convenience
             if address % 0x10000 != 0:
                 ctx.print_error("Address must be aligned to 0x10000 byte boundary.")
                 return
@@ -1434,6 +1451,11 @@ async def cmd_wp(args: str, ctx: CommandContext) -> None:
             except ValueError:
                 ctx.print_error("Invalid address.")
                 return
+            if address < 0:
+                ctx.print_error("Address must be non-negative.")
+                return
+            if address < 0x100:
+                address = address * 0x10000 # allow specifying block number instead of address, for convenience
             if address % 0x10000 != 0:
                 ctx.print_error("Address must be aligned to 0x10000 byte boundary.")
                 return
@@ -1446,6 +1468,11 @@ async def cmd_wp(args: str, ctx: CommandContext) -> None:
             except ValueError:
                 ctx.print_error("Invalid address.")
                 return
+            if address < 0:
+                ctx.print_error("Address must be non-negative.")
+                return
+            if address < 0x100:
+                address = address * 0x10000 # allow specifying block number instead of address, for convenience
             if address % 0x10000 != 0:
                 ctx.print_error("Address must be aligned to 0x10000 byte boundary.")
                 return

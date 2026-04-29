@@ -6,7 +6,7 @@ to enjoy the challenge of the CTF on your own!
 """
 
 from __future__ import annotations
-from typing import List
+from typing import Awaitable, Callable, List, TypeAlias
 
 from ..command_registry import CommandContext, CommandRegistry
 from . import sword_of_secrets            as sos
@@ -17,6 +17,9 @@ from . import sword_of_secrets_spoilers_3 as sos3
 # ---------------------------------------------------------------------------
 # Enums and types
 # ---------------------------------------------------------------------------
+
+Stage4CipherTextWriterType: TypeAlias = Callable[[CommandContext], Awaitable[None]]
+Stage4OneTimeBFScriptWriterType: TypeAlias = Callable[[CommandContext], Awaitable[None]]
 
 # ---------------------------------------------------------------------------
 # Registration entry point
@@ -201,6 +204,9 @@ async def write_stage4_solution(ctx: CommandContext) -> None:
 # Helper functions
 # ---------------------------------------------------------------------------
 
+
+
+
 async def write_stage4_function_ciphertext(ctx: CommandContext, ciphertext: bytes, erase: bool = True) -> None:
     datalen = len(ciphertext)
     if datalen % 0x10 != 0:
@@ -287,7 +293,16 @@ async def create_desired_ciphertext_for_code(ctx: CommandContext, progress_callb
             await sos.util_hex_dump(ctx, final_ciphertext, base_address=0x40004)
             return final_ciphertext
 
-async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
+async def default_stage4_bf_script_writer(ctx: CommandContext) -> None:
+    await sos.erase_flash_4k(0x50000, ctx)
+    await sos.write_flash(0x50000, STAGE4_BF_SCRIPT, ctx)
+
+async def ensure_bf_dump_prerequisites(
+    ctx: CommandContext,
+    *,
+    stage4_ciphertext_writer: Stage4CipherTextWriterType = write_stage4_solution,
+    stage4_bf_script_writer : Stage4OneTimeBFScriptWriterType | None = default_stage4_bf_script_writer
+    ) -> None:
     # This function will ensure all the prerequisites are in place to be able to
     # run a BF script that can dump bytes from RAM, without needing to reboot
     # between each execution of the BF script.
@@ -298,7 +313,7 @@ async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
         await sos2.write_stage2_solution(ctx)
         await sos3.cmd_sos3_autosolve(args="", ctx=ctx)
         ctx.print("Writing replacements 'code' ciphertext for stage 4")
-        await write_stage4_solution(ctx)
+        await stage4_ciphertext_writer(ctx)
         ctx.print("Ensuring WPS=1 (write protection per 64k-block)")
         old_wp_state = await sos.get_write_protect_state(ctx)
         if old_wp_state != sos.WriteProtectionType.INDIVIDUAL_BLOCK_PROTECT:
@@ -310,12 +325,13 @@ async def ensure_bf_dump_prerequisites(ctx: CommandContext) -> None:
         ctx.print("Rebooting with locked `code` ciphertext")
         await sos.util_send_command("REBOOT", ctx)
         ctx.print("Writing BF script to alter branch instruction in `code` (avoid lockup/crash)")
-        await sos.erase_flash_4k(0x50000, ctx)
-        await sos.write_flash(0x50000, STAGE4_BF_SCRIPT, ctx)
-        ctx.print("Executing BF script once");
+        if stage4_bf_script_writer is not None:
+            await stage4_bf_script_writer(ctx)
+        ctx.print("Executing SOLVE once");
         await sos.util_send_command("SOLVE", ctx)
-        ctx.print("Erasing BF script from flash (cleanup)")
-        await sos.erase_flash_4k(0x50000, ctx)
+        if stage4_bf_script_writer is not None:
+            ctx.print("Erasing BF script from flash (cleanup)")
+            await sos.erase_flash_4k(0x50000, ctx)
         ctx.print("Done!")
 
 async def parse_bf_dump_output_and_extract_bytes(ctx: CommandContext, lines: List[str]) -> bytearray:
