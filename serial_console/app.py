@@ -25,7 +25,7 @@ from .commands.sword_of_secrets_spoilers_1 import register_sword_of_secrets_spoi
 from .commands.sword_of_secrets_spoilers_2 import register_sword_of_secrets_spoilers_2
 from .commands.sword_of_secrets_spoilers_3 import register_sword_of_secrets_spoilers_3
 from .commands.sword_of_secrets_spoilers_4 import register_sword_of_secrets_spoilers_4
-#from .commands.sword_of_secrets_spoilers_5 import register_sword_of_secrets_spoilers_5
+from .commands.sword_of_secrets_spoilers_5 import register_sword_of_secrets_spoilers_5
 #from .commands.sword_of_secrets_spoilers_6 import register_sword_of_secrets_spoilers_6
 #from .commands.sword_of_secrets_spoilers_7 import register_sword_of_secrets_spoilers_7
 
@@ -54,7 +54,7 @@ class Application:
         register_sword_of_secrets_spoilers_2(self.command_registry)
         register_sword_of_secrets_spoilers_3(self.command_registry)
         register_sword_of_secrets_spoilers_4(self.command_registry)
-        #register_sword_of_secrets_spoilers_5(self.command_registry)
+        register_sword_of_secrets_spoilers_5(self.command_registry)
         #register_sword_of_secrets_spoilers_6(self.command_registry)
         #register_sword_of_secrets_spoilers_7(self.command_registry)
         

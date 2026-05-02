@@ -172,7 +172,7 @@ class SerialManager:
         # transmitted.  Set to 0 to disable (full-speed burst writes).
         # A value of ~0.001 (1 ms) is a safe starting point for devices
         # whose UART FIFO overflows at sustained 115 200 baud.
-        self.tx_byte_delay: float = 0.001
+        self.tx_byte_delay: float = 0.008
 
     # -- properties ----------------------------------------------------------
 
