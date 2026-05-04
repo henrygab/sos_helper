@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from binascii import Error
+import re
 
 from ..command_registry import CommandContext, CommandRegistry
 from enum import Enum
-from typing import Literal, Sequence, Tuple, overload, TypeAlias
+from typing import Iterable, List, Literal, Sequence, Tuple, overload, TypeAlias
 from . import sword_of_secrets as sos
 from . import sword_of_secrets_spoilers_1 as sos1
 from . import sword_of_secrets_spoilers_2 as sos2
@@ -63,7 +64,7 @@ def register_sword_of_secrets_spoilers_5(registry: CommandRegistry) -> None:
     registry.register(
         "fwdump", cmd_encrypted_firmware_dumper,
         "Write encrypted code that dumps firmware.",
-        usage="fwdump",
+        usage="fwdump [base_filename]",
         category="Sword of Secrets - Stage 5 Spoilers"
     )
 
@@ -318,8 +319,7 @@ async def write_replacement_function(ctx: CommandContext, fn_info: ReplacementFo
     """Enables the given replacement for function theSwordOfSecrets()"""
 
     with ctx.shell.suppress_serial_output():
-        ctx.print_info(f"Encrypted dumper function for '{fn_info.name}':")
-        await sos.util_hex_dump(ctx, fn_info.ciphertext, 0x40000)
+        ctx.print_info(f"Configuring encrypted dumper function for '{fn_info.name}'")
         
         old_wp_state = await sos.get_write_protect_state(ctx)
         if (old_wp_state != sos.WriteProtectionType.NONE):
@@ -351,6 +351,40 @@ async def erase_bf_script(ctx: CommandContext) -> None:
     await sos.erase_flash_4k(0x40000, ctx)
     ctx.print_info("Erased BF script from flash.")
 
+async def parse_raw_reversed_nibble_dump(raw: List[str]) -> bytes:
+
+    # each raw line of input must match regex:
+    # ^([0-9a-fA-F]{8}): ([0-9a-fA-F]{8})$
+    line_regex = re.compile(r"^([0-9a-fA-F]{8}): ([0-9a-fA-F]{8})$")
+
+    # The first  group is the nibble-reversed address
+    # The second group is the nibble-reversed value at that address
+    starting_address = None
+    prior_address = None
+    output_bytes = bytearray()
+    for line in raw:
+        line = line.strip()
+        if line == "":
+            continue
+        match = line_regex.match(line)
+        if not match:
+            continue
+        addr_reversed_nibbles = match.group(1)
+        value_reversed_nibbles = match.group(2)
+        # reverse the nibbles back to normal order
+        addr = int(addr_reversed_nibbles[::-1], 16)
+        value = int(value_reversed_nibbles[::-1], 16)
+        # first address? take it at face value
+        if starting_address is None:
+            starting_address = addr
+            prior_address = addr - 0x04
+        if addr != prior_address + 0x04:
+            raise ValueError(f"Non-sequential address: {addr:#010x} does not follow {prior_address:#010x}")
+        output_bytes.extend(value.to_bytes(4, byteorder='little'))
+        prior_address = addr
+
+    return output_bytes
+
 # ---------------------------------------------------------------------------
 # Commands registered with serial console
 # ---------------------------------------------------------------------------
@@ -358,32 +392,66 @@ async def erase_bf_script(ctx: CommandContext) -> None:
 async def cmd_encrypted_firmware_dumper(args: str, ctx: CommandContext) -> None:
     """Encrypts (and prints) the firmware dumper function, or writes it to flash"""
     args = args.strip()
+    filenamebase : str | None = None
     if args != "":
-        raise ValueError(f"Command takes no arguments, but got: {args!r}")
+        arg_list = args.split()
+        if len(arg_list) != 1:
+            raise ValueError(f"Command takes one optional argument, but got: {arg_list!r}")
+        filenamebase = arg_list[0]
 
-    ctx.print("Setting up prerequisites")
-    await sos4.ensure_bf_dump_prerequisites(
-        ctx,
-        # executed ... could write another do-nothing function, but this one's fast
-        stage4_ciphertext_writer=write_fn_test,
-        stage4_bf_script_writer=erase_bf_script
-    )
-    ctx.print("Dumping vendor and options bytes")
-    await sos.erase_flash_4k(0x40000, ctx)
-    await write_fn_vendor_and_options(ctx)
-    await sos.util_send_command("REBOOT", ctx)
-    await sos.util_send_command("SOLVE", ctx)
-    ctx.print("Dumping bootloader")
-    await sos.erase_flash_4k(0x40000, ctx)
-    await write_fn_bootloader(ctx)
-    await sos.util_send_command("REBOOT", ctx)
-    await sos.util_send_command("SOLVE", ctx)
-    ctx.print("Dumping firmware")
-    await sos.erase_flash_4k(0x40000, ctx)
-    await write_fn_firmware(ctx)
-    await sos.util_send_command("REBOOT", ctx)
-    await sos.util_send_command("SOLVE", ctx)
-    ctx.print("Done")
+    with ctx.shell.suppress_serial_output():
+        ctx.print("Setting up prerequisites")
+        await sos4.ensure_bf_dump_prerequisites(
+            ctx,
+            # executed ... could write another do-nothing function, but this one's fast
+            stage4_ciphertext_writer=write_fn_test,
+            stage4_bf_script_writer=erase_bf_script
+        )
+
+        ctx.print("Dumping vendor and options bytes")
+        await sos.erase_flash_4k(0x40000, ctx)
+        await write_fn_vendor_and_options(ctx)
+        await sos.util_send_command("REBOOT", ctx)
+        vendor_raw = await sos.util_send_command("SOLVE", ctx)
+        vendor = await parse_raw_reversed_nibble_dump(vendor_raw)
+
+        ctx.print("Dumping bootloader")
+        await sos.erase_flash_4k(0x40000, ctx)
+        await write_fn_bootloader(ctx)
+        await sos.util_send_command("REBOOT", ctx)
+        bootloader_raw = await sos.util_send_command("SOLVE", ctx)
+        bootloader = await parse_raw_reversed_nibble_dump(bootloader_raw)
+
+        ctx.print("Dumping firmware")
+        await sos.erase_flash_4k(0x40000, ctx)
+        await write_fn_firmware(ctx)
+        await sos.util_send_command("REBOOT", ctx)
+        firmware_raw = await sos.util_send_command("SOLVE", ctx)
+        firmware = await parse_raw_reversed_nibble_dump(firmware_raw)
+
+        await asyncio.sleep(3)
+
+        if filenamebase is not None:
+            with open(f"{filenamebase}_vendor_and_options.bin", "wb") as f:
+                f.write(vendor)
+            with open(f"{filenamebase}_bootloader.txt", "wb") as f:
+                f.write(bootloader)
+            with open(f"{filenamebase}_firmware.txt", "wb") as f:
+                f.write(firmware)
+
+        else:
+            ctx.print("\n\n\n\n\n\n\n")
+            ctx.print("*" * 80)
+            await sos.util_hex_dump(ctx, firmware,   0x00000000)
+            await sos.util_hex_dump(ctx, bootloader, 0x1FFFF000)
+            await sos.util_hex_dump(ctx, vendor,     0x1FFFF7C0)
+            ctx.print("*" * 80)
+            ctx.print("\n\n\n\n\n\n\n")
+
+        ctx.print("Done\n")
+        ctx.print("\n\n\n\n\n\n\n")
+
+        
 
 
 

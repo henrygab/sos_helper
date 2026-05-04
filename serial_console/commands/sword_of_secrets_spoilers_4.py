@@ -324,7 +324,8 @@ async def ensure_bf_dump_prerequisites(
         await sos.wps_lock_block(ctx, 0x40000)
         ctx.print("Rebooting with locked `code` ciphertext")
         await sos.util_send_command("REBOOT", ctx)
-        ctx.print("Writing BF script to alter branch instruction in `code` (avoid lockup/crash)")
+        if stage4_bf_script_writer == default_stage4_bf_script_writer:
+            ctx.print("Writing BF script to alter branch instruction in `code` (avoid lockup/crash)")
         if stage4_bf_script_writer is not None:
             await stage4_bf_script_writer(ctx)
         ctx.print("Executing SOLVE once");

@@ -638,7 +638,7 @@ async def util_hex_dump(ctx: CommandContext, data: bytes, base_address: int = 0)
         chunk = data[i:i+16]
         hex_bytes = ' '.join(f"{b:02x}" for b in chunk)
         ascii_bytes = ''.join((chr(b) if 32 <= b <= 126 else '.') for b in chunk)
-        ctx.print(f"{base_address + i:06x}  {hex_bytes:<48}  {ascii_bytes}")
+        ctx.print(f"{base_address + i:08x}  {hex_bytes:<48}  {ascii_bytes}")
 
 async def util_hex_dump_for_python(ctx: CommandContext, data: bytes) -> List[str]:
     """Return a list of strings representing the bytes formatted as a Python bytes literal."""
